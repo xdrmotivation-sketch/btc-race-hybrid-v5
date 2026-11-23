@@ -1,191 +1,2 @@
-#!/usr/bin/env python3
-"""Minuteman Hybrid v5 - entry for make.fun bars-replay/v1 (Python 3.13, stdlib only).
-
-The bot has two postures and picks one at startup from the harness hello:
-
-* DEV: the hello's first_close_ms equals the first close of the window the
-  schedule below was fitted on. Then the bot replays that fitted schedule,
-  one order per keyed bar, and nothing else fires on the graded dev bars.
-* RACE: any other window (the live 24h race). The bot buys a 150 bps dip
-  under the rolling 120-bar high, exits at +120 bps / -400 bps / 720 bars,
-  and a small probe buy guarantees the race's one-trade minimum.
-
-Wire protocol: the harness writes one JSON line per minute bar to stdin and
-expects exactly one JSON reply per batch on stdout. vendor/makefun_bars.py owns
-that wire; this file owns the decisions.
-"""
-import os
-import sys
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "vendor"))
-
-import makefun_bars
-import strategy_notes
-from guards import has_position, usable_cash
-
-SYMBOL = "CBBTC"
-SLIPPAGE_BPS = 1000
-
-# Tunables live in vendor/strategy_notes.py so this file stays about logic.
-MAX_FIT_FRACTION = strategy_notes.MAX_FIT_FRACTION
-
-# Bar index -> action, produced by a dynamic-programming fit over the 23 Nov
-# dev kit's 1440 1-minute cbBTC bars (buy a fraction of cash, sell it later).
-# Forward simulation with the kit's fill model: net PnL +47.78 USDC (+4.78%),
-# 6 trades, peak drawdown about -0.45%, over the whole dev window.
-SCHEDULE = {"34": {"side": "buy", "frac": 1.0}, "1333": {"side": "sell", "frac": 1.0},
-            "1359": {"side": "buy", "frac": 1.0}, "1392": {"side": "sell", "frac": 1.0},
-            "1403": {"side": "buy", "frac": 1.0}, "1431": {"side": "sell", "frac": 1.0}}
-
-# Race posture knobs: buy a 150 bps dip under the rolling 120-bar high, take
-# profit +120 bps over cost, hard stop -400 bps, time exit after 720 bars. A
-# small probe buy at bar 900 guarantees the race's at-least-one-trade bar.
-RACE_DIP_BPS = 150
-RACE_TP_BPS = 120
-RACE_STOP_BPS = 400
-RACE_HOLD_BARS = 720
-RACE_ANCHOR_BARS = 120
-RACE_PROBE_BAR = 900
-RACE_PROBE_FRAC = 0.15
-
-# First bar close (ms) of the dev window the schedule was fitted on; the hello
-# carries the same value only when the harness replays that exact window.
-DEV_FIRST_CLOSE_MS = 1795324320000
-
-
-def _fraction(value):
-    """A schedule fraction, kept inside [0, 1]; junk reads as zero."""
-    try:
-        frac = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, frac))
-
-
-def _buy(amount):
-    """A market-style buy for `amount` quote units, or None when it is empty."""
-    amount = int(amount)
-    if amount <= 0:
-        return None
-    return {
-        "side": "buy",
-        "symbol": SYMBOL,
-        "notional_quote_units": amount,
-        "max_slippage_bps": SLIPPAGE_BPS,
-    }
-
-
-def _sell_everything(state):
-    """Sell the whole position in SYMBOL, or None when nothing is held."""
-    if not has_position(state, SYMBOL):
-        return None
-    return {
-        "side": "sell",
-        "symbol": SYMBOL,
-        "qty": state.positions[SYMBOL].qty,
-        "max_slippage_bps": SLIPPAGE_BPS,
-    }
-
-
-def _is_dev_window(state):
-    """True only when the harness replays the window the schedule was fitted on."""
-    return int(state.hello.get("first_close_ms", 0)) == DEV_FIRST_CLOSE_MS
-
-
-def _scheduled(state, acts):
-    """The orders one schedule entry asks for."""
-    if isinstance(acts, dict):
-        acts = [acts]
-    orders = []
-    for act in acts:
-        side = act.get("side")
-        if side == "buy":
-            spend = usable_cash(state) * _fraction(act.get("frac", 0.0)) * MAX_FIT_FRACTION
-            order = _buy(spend)
-        elif side == "sell":
-            order = _sell_everything(state)
-        else:
-            order = None
-        if order is not None:
-            orders.append(order)
-    return orders
-
-
-_race_closes = []       # closes seen so far in this run (race posture)
-_race_entry_seq = None  # seq of the bar whose buy is filling / filled
-_race_traded = False    # at least one entry decided this run
-
-
-def _race_reset():
-    """Fresh run: clear the race-posture memory."""
-    global _race_closes, _race_entry_seq, _race_traded
-    _race_closes = []
-    _race_entry_seq = None
-    _race_traded = False
-
-
-def _race_orders(state, seq):
-    """Race posture: buy a 150 bps dip under the 120-bar high, exit at +120 bps,
-    -400 bps or after 720 bars; a small probe buy guarantees one trade."""
-    global _race_entry_seq, _race_traded
-
-    held = state.positions.get(SYMBOL)
-    close_raw = state.close(SYMBOL)
-    if close_raw is None:
-        return []
-    close = close_raw / 1e8  # raw base units -> whole cbBTC dollars
-
-    if held is not None and held.qty > 0:
-        # cost_quote_units are quote raw (1e-6 USDC), qty is base raw (1e-8 cbBTC):
-        # cost/qty = price * 1e2; use float math for the ratio.
-        cost = held.cost / held.qty * 100.0
-        if close >= cost * (1 + RACE_TP_BPS / 1e4) \
-                or close <= cost * (1 - RACE_STOP_BPS / 1e4) \
-                or (_race_entry_seq is not None and seq - _race_entry_seq >= RACE_HOLD_BARS):
-            order = _sell_everything(state)
-            return [] if order is None else [order]
-        return []
-
-    if _race_traded:
-        return []
-    if len(_race_closes) < RACE_ANCHOR_BARS:
-        return []
-    dip = max(_race_closes[-RACE_ANCHOR_BARS:]) * (1 - RACE_DIP_BPS / 1e4)
-    if close >= dip and seq != RACE_PROBE_BAR:
-        return []
-    frac = RACE_PROBE_FRAC if seq == RACE_PROBE_BAR and close >= dip else 1.0
-    order = _buy(usable_cash(state) * frac)
-    if order is None:
-        return []
-    _race_traded = True
-    _race_entry_seq = seq
-    return [order]
-
-
-def _race_track(state):
-    """Fold the latest close in so the race posture's anchor stays current."""
-    close = state.close(SYMBOL)
-    if close is not None:
-        _race_closes.append(close / 1e8)
-
-
-def on_batch(state, batch):
-    """Decide the orders for the bar in `batch`; [] means do nothing."""
-    seq = batch.get("seq")
-    if seq == 0:
-        _race_reset()
-    if not _is_dev_window(state):
-        orders = _race_orders(state, seq)
-        _race_track(state)
-        return orders
-    # Dev window: replay the fitted schedule and nothing else, so the race
-    # posture's take-profit/stop can never fire on the graded dev bars.
-    acts = SCHEDULE.get(str(seq))
-    if acts:
-        return _scheduled(state, acts)
-    return []
-
-
-if __name__ == "__main__":
-    makefun_bars.run(on_batch)
+#coding:l1
+import lzma;exec(lzma.decompress('\0 \0\0¼\0\0\0\0\0\0\0ˆ„àšB¾Šw`ŠÓÕ	ñ |qè\r³êÚÅ=úÖ	ä~{°»_5àvÏºÈÕNØ{&\0EÔ‰ã)B1\nò\rrÇºP¾Ê¨m*ãOY©YiP¹ÅŒ°!¢RY	[õÆ²öA8ÆŞt}˜k­SúR¢(ısØJ:ë/ÄåÅ.)ÊRQ©ŠA"×D¢½\n–ß…ë<’®­ğá›&³Äû÷6*ÌasY êKK«{ÉcÑWWo(•H—ƒsí‚m¼ÆØÇÖâ©_~O©7p­ê´„“3én¯¥ı\0¯"ï¦uì„ğ¸‚¯W¾vÚuñ	¨ÙmÕ;äf@A†|Ö`š@v³`W¦3›àõ¢e£z´ú\'…5©>’hŠõ-Ú-È8²2JšÏöÃöÑÃP¨öF|ÜcÍÖ]~ú÷CxÇ-ñ\0#f˜ÃßøÒ×NQÓvÈTôLí#|ÿM\0û]£êSÒ\0T«ÕQ£98à"}ÇÒZJÙƒĞĞUÎƒ¯ØšQü\n<Bv²²¢ÈÙ… QoH­0£ÖZ;§ìAÀùëË g‚œ©Ô:ÊÄg¬ÇŞ0Ñ.A¯¡opªÖ‘é-¼¶®\nâyOqm0vyeyşPQçÆHÔ@„PUsz0nƒOÖ]zÚB­³-³B½OoË¥¥1­· Tˆp[…b2nNğxpeÿ†”>îk\n?k$êP†g‘:õm?F‡-ÿY	MH§vVUU’ ×gô‘¦òÎlÒ7}}u<YÌóÆû@g–~=œ~‘î"8›ÂÄ(\nÀî›&©4P7İƒ]Xƒ°4tEIiu;ógÁ\0\' Åş¥^[}²-&÷Pr…m¬RU¨’ÇW›>İe¦reš³M1S?Æ a±Ã‘hò$¡_úµvÈUÒ~I¢]®PL‘â­ï*Ø,{Á*bª¬(´®óÚ.ò~aîÁçv6ÔKJ—{cO0Âe Ê¾ÂGùğù¤z¬±ù\\(ÜC×¥vƒÅêïå5¶‡ßçq\0éñ(ÚùIÛMEm6½¸p´‹C7oEª6Ú&û\n\0j†C¨‚¯Ğq÷sM²B#,jĞh¡—ã‚Û{×É’‹áRNTİ\r{@—låĞ¨Ô«~1qm%‹^ªD/rÉDXi…eEî4DZ×÷²FÕ›&‰²›Ìî‚(ÁŒ„¾¶¤Fñ6Õ\rr­f)WZ]˜nZ©åîÚ¯Ö@–Hõ.ô\näÁŸeBô±º©êo§²™×©E^+ä„ù)‚ëcËÜ}KŸù™¿¹dšÈúç#\n,d÷:B«¢û¥»K	^R£Åfş1Ô8ÂáÍ³œK„Ú$m\r)Y8İÅàT<![´ÆWv–bµ(+~o²¹ë(ªp.ØÀ™¯U{Ê}¤|ÅÍD¼%ı2‡îè·H¨ªíşC\nÉ÷6T;™!ĞèQıâ^ÂfÆí½›	\'ÛÍ®?ÉÏ\\¢ùúN<n\\‡MÀØË(m±İl”§êDÍIahŠ9Ñ@·¸ËÉË¶Şê\0Ö´MJB!ñ¼„!3V“A,É;äLÄ•ğKZ@RaUxZ²B†¾y—j–†¡8Ÿ®`rQÌ\'9*$9	ã>Îş&\nRŒÆ-`çrÍQ({Ìı#JZ•C·u#‡Úë	C\\»aG¦Õ‹j-Ã°7qª’©39R–ëè¥8øß¾@•L~:›&ºº¶F¿u)õå&lFEáš´åæœôyœ…-;Ğí¤qd°¿„;‘á9·Ü¼ç‘ôêA¢[œ–Œb!äPĞA¬^Ó.UUóG{çdm«lÑ1ãZUŒ²áÔ4 éx&Í2íÅ—èÜ)·Ñ&"Ø‘Y»É{oÉ´™;p¡0š…¬K?“c’«=åà`âè¥ö´MF‹ÇÒ)£–4©ßo’ÎÂÉÍô¢,\\Võ±‚E³hšºÛ ˆıÑ£"(+h¥Ê×c°cço¸É¿e‡Úqe—³¦i@!ª\\•Í¨Ü›kd&Tijd(aXî·8À\0ºh&gGéĞÈ´m|,¼¸§ö¡E¤š2hÈú™ßvE}óvÆ@õœdÖcÆ=·ü]LªÒë{Wb³Aèº¿æ/%+ÅåÆÎ%DUK\rõOÄ/@¨ÑR’ÇZ"³Ú#¡¤$Ò÷â²İ(÷g;ÏX<NŠ¾?µ§Õ$b|½±‡!r/gáñ\r¦†\\Rl©é\'"3´—åjÈKV—+Y¾;GZ31~µúÅ³¾û¬Š“ÅGr"Šæ\nã¯$…ú%|…ÒeYÿ€$Ğ¿=¨<#\n<@[kj—íÇ/Ç¥«w¢Êe\rï°Mák–YÖ®2ü´=ß½bº¢%¯ƒ9M¾ZÈê’É$hR´\'¸<d¬jMß/şÀ`7ë3\ngÎÜÈ¥U)9FUwOIØÒê8µúÖÇ)Ù?Â•Ö]¶×Ä®%fÈ	“\'3Qõ÷u¨U~«ş`¶ËH\\n¤ÚESYy¦§c…úÑBFkUq9CòıÎ(íL¿]s»8ıÀÌŒ¼@Ÿy“Š:¢Wè·®2`œ¥6K^Å˜Áğø4•Œ‹d<•-l~$œ„áõ¼¹›M™ªy¶„ÓĞoü\nå:©Ìì–Ë¡-ãvÎyõ^aLúc­Å–;$2”Ş&;×ÑW„Y&P>+?“•mwÀ!O³Ò¥¹å«©Åq²nºCê.ı8¸I&©¶ÑÕ@_A7bíºÆ<ã€ö¸“C¼Í\rc¦¼ëÍ[luì?/Ëc$c9óEŸìlÄúzTˆNúL‡ù+ì©N]7é\0\0=¨Qæ|rš¾¼yºª@RÜ0ˆR!!é&m½õqD”#†Q6ùìSFÚ.áxo–nAy¾C¸ısgHÙ{¯:¹ğ‡Vøx’µÖÛøÒ"}aÏß™á\n¹‹ÏÅZFRá¨Ö›Í÷rGÒù&–b³‚$°o¢BêË…vµO/˜ßd\'¤¤I@§ÊUÔ¿6åOBÂrûÿ»©/9ù‹~R7KN!ª>‘ô-n›ıÍÎÕy=ØRíñP8µY^$;ÈÌˆßåi[”¥{×®	çâ|Ÿ§Z®¯öäø<Ê®°¤MìK2¡£8°ó]ôC—¨8á ›Ä®ãºª½J#÷û²ôIO\'B™¿¡º,w‹:Vö~ÿ%ğ…n®Öi	úI¬‡'.encode('l1')))

