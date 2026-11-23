@@ -1,7 +1,7 @@
-"""Strategy notes and the tuned constants for the Minuteman Hybrid v3 bot.
+"""Strategy notes and the tuned constants for the Minuteman Hybrid v5 bot.
 
-The numbers here are what the dev-window fits on the btc-race kits showed:
-fractions, fees and the race posture. Kept beside the wire shim so the
+The numbers here are what the dev-window fits on the make.fun btc-race kits
+showed: fractions, fees and the race posture. Kept beside the wire shim so the
 entrypoint stays about decisions, not constants.
 """
 
@@ -11,12 +11,12 @@ SLIPPAGE_MODEL_BPS = 2
 
 # Schedule fits are re-derived per competition window; the 6 Nov window paid
 # more in price impact above 0.55 than it earned back, so fractions above it
-# were cut. The 18 Nov fit held at full size.
+# were cut. The 23 Nov fit held at full size.
 MAX_FIT_FRACTION = 1.0
 
 # Race posture: the 15 Nov race showed fitted-DP bots bleeding -5..-7 percent
 # live while low-turnover holders led the board, so the live mode buys once
-# early and holds to the end-of-run flatten.
+# on a dip and holds to the end-of-run flatten.
 LIVE_TURN = "hold"
 
 # Price-impact guard: never send an order worth more than this share of the
