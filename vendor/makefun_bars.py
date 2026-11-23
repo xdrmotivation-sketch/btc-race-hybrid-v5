@@ -41,7 +41,6 @@ before the scored window, to build history from, and every order decided on one 
 stderr). Every entry runs twice and the two action logs must match byte for byte: never read the
 clock, the environment or an unseeded random; seed ``random.Random`` from ``int(state.hello["seed"])``.
 """
-
 import json
 import re
 import sys
@@ -131,7 +130,7 @@ class BarsState:
 
     @property
     def warming_up(self):
-        """True while the batch being answered is a warm-up batch (seq < warmup_bars): any order decided on it is rejected (warmup). Always False without a warm-up."""
+        """True while the batch being answered is a warm-up batch (seq < warmup_bars). Always False without a warm-up."""
         return self.warmup_bars > 0 and self.seq < self.warmup_bars
 
     def close(self, symbol):
@@ -154,11 +153,10 @@ class BarsState:
         return None if bar is None else [int(d) for d in bar["c_depth"]]
 
     def impact_bps(self, symbol, amount):
-        """The price impact in bps, truncated, of one trade worth ``amount`` quote units on the pool depth_at(symbol), untouched.
+        """The price impact in bps, truncated, of one trade worth ``amount`` quote units on the pool depth_at(symbol).
 
-        ``amount`` is a buy's spend after the fee, or a sell's quantity valued at the open: (M - 1) x 10000
-        for M = 1 + a/D1 + a/D2, a in USDC raw units. A buy pays the slipped open times M, a sell gets it
-        divided by M. None before the symbol's first bar.
+        ``amount`` is a buy's spend after the fee, or a sell's quantity valued at the open:
+        (M - 1) x 10000 for M = 1 + a/D1 + a/D2, a in USDC raw units. None before the symbol's first bar.
         """
         depth = self.depth_at(symbol)
         if depth is None:
@@ -178,9 +176,16 @@ class BarsState:
 
     def weight_room(self, symbol):
         """The most a buy of the symbol may spend in one reply under caps.max_weight_bps (before other buys of it)."""
-        held = self.positions.get(symbol)
-        room = self.hello["caps"]["max_weight_bps"] * self.equity // BPS - self.value(symbol, held.qty if held else 0)
-        return room if room > 0 else 0
+        s = self.symbols.get(symbol)
+        cap = self.hello["caps"].get("max_weight_bps")
+        price = self.close(symbol)
+        if s is None or cap is None or price is None:
+            return self.cash
+        room = self.equity * int(cap) // BPS
+        for p in self.account["positions"]:
+            if p["symbol"] == symbol:
+                room -= int(p["qty"]) * price * 10 ** self.hello["capital"]["quote_scale"] // 10 ** (s["qty_scale"] + s["price_scale"])
+        return max(0, room)
 
     def client_id(self):
         """A fresh client_id (o1, o2, ...) never used in this run."""
@@ -385,5 +390,5 @@ def run(on_batch, on_hello=None, on_done=None, *, input=None, output=None):
         else:
             raise ProtocolError(f"input line {line_no}: unknown message type {_describe(kind)}")
     if state is None:
-        raise ProtocolError("input ended before hello")
+        raise ProtocolError(f"input ended before hello")
     raise ProtocolError(f"input ended before done (after {state.seq + 1} batches)")
